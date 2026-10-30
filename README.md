@@ -105,7 +105,7 @@ your-project/
 | 表格 | TanStack Table |
 | 表单与校验 | React Hook Form、Zod |
 | 图表与提示 | Recharts、Sonner |
-| 日期与请求 | date-fns、原生 fetch |
+| 日期与请求 | date-fns、Axios（统一封装于 `src/lib/api.ts`） |
 | 测试 | Vitest、Testing Library、Playwright |
 
 完整要求见 [前端规范](.claude/skills/frontend-stack/references/frontend-rules.md)，依赖策略见 [fe-stack.json](.claude/skills/frontend-stack/guard/fe-stack.json)。
@@ -118,6 +118,20 @@ your-project/
 - **新增依赖是显式决定。** 先确认需求和理由，再更新清单。
 
 本项目不锁定全部依赖版本，也不提供应用 lockfile。请按所选 Vite/shadcn 版本要求准备 Node.js、pnpm，并维护项目自己的锁文件。不要将 Base UI + Nova 与其他 shadcn 基础组件或 preset 混用。
+
+## 请求与状态分层
+
+```text
+组件 → 业务 Query/Mutation hooks → 业务 API 函数 → src/lib/api.ts（Axios）→ 后端
+```
+
+- **Axios 封装**统一实例、地址、超时、认证及错误归一化；业务代码不直接调用 axios 或 fetch。请求错误必须继续抛出，把 Query 的取消信号传给 Axios。
+- **TanStack Query**负责服务端数据、缓存、失效刷新与重试；不要在 Axios 拦截器里叠加通用重试，也不默认重试非幂等写操作。
+- **Zustand**仅管理跨组件/页面的纯客户端状态。后端数据不复制进 store，不引入 Redux 等第二套共享状态库。
+- **useState/useReducer**管理局部 UI 状态；**React Hook Form**管理表单；需要链接分享和前进后退恢复的状态优先放 URL；派生值直接计算。
+- 不默认持久化全部 store，不在 localStorage store 中存密码或访问令牌。401 刷新只在项目有对应协议时实现，并明确并发和重放边界。
+
+这仍是规范包，不包含可直接部署的 Axios 客户端实现。具体返回结构、认证协议与下载响应等需按项目契约实现，不能统一假设全部返回 `response.data.data`。
 
 ## 依赖检查
 
@@ -132,7 +146,7 @@ node .claude/skills/frontend-stack/guard/check-deps.mjs
 | 输入 | 结果 |
 |---|---|
 | 已登记依赖 | 退出码 0 |
-| 禁用依赖，例如 axios | 退出码 1，提示替代方案 |
+| 禁用依赖，例如 swr | 退出码 1，提示替代方案 |
 | 未登记依赖 | 退出码 1，要求登记理由 |
 
 本仓库本身没有应用 `package.json`，不要在规范仓库根目录直接执行该检查器。
@@ -171,16 +185,17 @@ node .claude/skills/frontend-stack/guard/check-deps.mjs
 import {
   restrictedImports,
   uiOnlyImports,
+  apiOnlyImports,
 } from "./.claude/skills/frontend-stack/guard/eslint-restricted.js";
 ```
 
-在原配置数组末尾，按顺序追加两个配置。例如原文件导出一个数组，可改为以下形式；`existingConfigs` 代表你的原有配置，不是另一个依赖：
+在原配置数组末尾，按顺序追加三个配置。例如原文件导出一个数组，可改为以下形式；`existingConfigs` 代表你的原有配置，不是另一个依赖：
 
 ```js
-export default [...existingConfigs, restrictedImports, uiOnlyImports];
+export default [...existingConfigs, restrictedImports, uiOnlyImports, apiOnlyImports];
 ```
 
-使用 `defineConfig([...])` 的项目同样追加到数组末尾。若原有配置包含 `no-restricted-imports`，需要手动合并其额外限制，否则后面的配置会覆盖该规则。
+使用 `defineConfig([...])` 的项目同样追加到数组末尾。若原有配置包含 `no-restricted-imports` 或 `no-restricted-syntax`，需要手动合并其额外限制，否则后面的配置会覆盖该规则。
 
 ### 3. 检查覆盖范围
 
@@ -189,6 +204,8 @@ export default [...existingConfigs, restrictedImports, uiOnlyImports];
 - 业务代码不能直接导入 Base UI、分栏底层库或 Sonner 的 `Toaster`。
 - `src/components/ui/**` 可以使用上述底层库，但仍不能导入禁用库。
 - 业务代码可以直接调用 Sonner 的 `toast`。
+- Axios 的静态导入/再导出（包括子路径和类型）仅允许在 `src/lib/api.ts`。UI 目录不享有 Axios 例外，其他文件从统一封装获取能力或类型。
+- Axios 边界规则不覆盖动态 `import()`、CommonJS `require()` 或别名绕过；也不自动检测直接调用 fetch，仍须审查。
 
 目录结构不同时，调整 `files` 和 `ignores`。ESLint 的禁用清单是依赖策略的部分覆盖，不代表全部规范都能自动检查。
 
